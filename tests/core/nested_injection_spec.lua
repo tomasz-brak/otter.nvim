@@ -1,0 +1,22 @@
+describe("nested language injections", function()
+  before_each(function() end)
+
+  it("can load otter and keeper modules", function()
+    local otter = require("otter")
+    local keeper = require("otter.keeper")
+    assert(otter ~= nil)
+    assert(keeper ~= nil)
+  end)
+
+  it("has extract_code_chunks function", function()
+    local keeper = require("otter.keeper")
+    assert.equals("function", type(keeper.extract_code_chunks))
+  end)
+
+  it("keeper module has expected structure", function()
+    local keeper = require("otter.keeper")
+    assert.equals("table", type(keeper.rafts))
+    assert.equals("function", type(keeper.sync_raft))
+    assert.equals("function", type(keeper.get_current_language_context))
+  end)
+end)
