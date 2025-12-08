@@ -221,7 +221,7 @@ end
 local function extract_from_parser_recursive(parser, main_nr, lang, exclude_eval_false, range_start_row, range_end_row, code_chunks)
   -- Get the language for this parser
   local parser_lang = parser:lang()
-  
+
   -- Get the injection query for this language
   local query_obj = ts.query.get(parser_lang, "injections")
   if query_obj then
@@ -253,7 +253,7 @@ keeper.extract_code_chunks = function(main_nr, lang, exclude_eval_false, range_s
   
   -- Recursively extract from parser and all nested child parsers
   extract_from_parser_recursive(parser, main_nr, lang, exclude_eval_false, range_start_row, range_end_row, code_chunks)
-  
+
   return code_chunks
 end
 
