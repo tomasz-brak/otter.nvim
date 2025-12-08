@@ -115,6 +115,128 @@ end
 ---@field text string[]
 ---@field leading_offset number
 
+---Extract code chunks from a single language tree
+---@param query_obj vim.treesitter.Query The query to use for extraction
+---@param trees table The syntax trees to query
+---@param main_nr integer The main buffer number
+---@param lang string? language filter. All languages if nil.
+---@param exclude_eval_false boolean? Exclude code chunks with eval: false
+---@param range_start_row integer? Row to start from, inclusive, 1-indexed.
+---@param range_end_row integer? Row to end at, inclusive, 1-indexed.
+---@param code_chunks table<string, CodeChunk[]> Accumulator for code chunks
+local function extract_from_trees(query_obj, trees, main_nr, lang, exclude_eval_false, range_start_row, range_end_row, code_chunks)
+  for _, tree in ipairs(trees) do
+    local root = tree:root()
+    local lang_capture = nil
+    for _, match, metadata in query_obj:iter_matches(root, main_nr, 0, -1, { all = true }) do
+      for id, nodes in pairs(match) do
+        local name = query_obj.captures[id]
+
+        for _, node in ipairs(nodes) do
+          local text
+          lang_capture = determine_language(main_nr, name, node, metadata, lang_capture)
+          if
+            lang_capture
+            and (name == "content" or name == "injection.content")
+            and (lang == nil or lang_capture == lang)
+          then
+            -- the actual code content
+            text = ts.get_node_text(node, main_nr, { metadata = metadata[id] })
+            -- remove surrounding quotes
+            -- (workaround for treesitter offsets not properly processed)
+            text, _ = fn.strip_wrapping_quotes(text)
+            if exclude_eval_false and string.find(text, "| *eval: *false") then
+              text = ""
+            end
+
+            -- Use the range from the `offset!` directive if available
+            local start_row, start_col, end_row, end_col
+            if metadata[id] and metadata[id].range then
+              start_row, start_col, end_row, end_col = unpack(metadata[id].range)
+            else
+              start_row, start_col, end_row, end_col = node:range()
+            end
+
+            if
+              range_start_row ~= nil
+              and range_end_row ~= nil
+              and ((start_row >= range_end_row and range_end_row > 0) or end_row < range_start_row)
+            then
+              goto continue
+            end
+            local leading_offset
+            text, leading_offset = trim_leading_witespace(text, main_nr, start_row)
+            local result = {
+              range = { from = { start_row, start_col }, to = { end_row, end_col } },
+              lang = lang_capture,
+              node = node,
+              text = fn.lines(text),
+              leading_offset = leading_offset,
+            }
+            if code_chunks[lang_capture] == nil then
+              code_chunks[lang_capture] = {}
+            end
+            table.insert(code_chunks[lang_capture], result)
+            -- reset current language
+            lang_capture = nil
+          elseif fn.contains(injectable_languages, name) then
+            -- chunks where the name of the language is the name of the capture
+            if lang == nil or name == lang then
+              text = ts.get_node_text(node, main_nr, { metadata = metadata[id] })
+              text, _ = fn.strip_wrapping_quotes(text)
+
+              ---@type integer
+              ---@diagnostic disable-next-line: assign-type-mismatch
+              local start_row, start_col, end_row, end_col = node:range()
+              local leading_offset
+              text, leading_offset = trim_leading_witespace(text, main_nr, start_row)
+              local result = {
+                range = { from = { start_row, start_col }, to = { end_row, end_col } },
+                lang = name,
+                node = node,
+                text = fn.lines(text),
+                leading_offset = leading_offset,
+              }
+              if code_chunks[name] == nil then
+                code_chunks[name] = {}
+              end
+              table.insert(code_chunks[name], result)
+            end
+          end
+          ::continue::
+        end
+      end
+    end
+  end
+end
+
+---Recursively extract code chunks from parser and all child parsers (for nested injections)
+---@param parser vim.treesitter.LanguageTree The parser to extract from
+---@param main_nr integer The main buffer number
+---@param lang string? language filter. All languages if nil.
+---@param exclude_eval_false boolean? Exclude code chunks with eval: false
+---@param range_start_row integer? Row to start from, inclusive, 1-indexed.
+---@param range_end_row integer? Row to end at, inclusive, 1-indexed.
+---@param code_chunks table<string, CodeChunk[]> Accumulator for code chunks
+local function extract_from_parser_recursive(parser, main_nr, lang, exclude_eval_false, range_start_row, range_end_row, code_chunks)
+  -- Get the language for this parser
+  local parser_lang = parser:lang()
+  
+  -- Get the injection query for this language
+  local query_obj = ts.query.get(parser_lang, "injections")
+  if query_obj then
+    local trees = parser:parse()
+    if trees then
+      extract_from_trees(query_obj, trees, main_nr, lang, exclude_eval_false, range_start_row, range_end_row, code_chunks)
+    end
+  end
+  
+  -- Recursively process child parsers for nested injections
+  for _, child_parser in pairs(parser:children()) do
+    extract_from_parser_recursive(child_parser, main_nr, lang, exclude_eval_false, range_start_row, range_end_row, code_chunks)
+  end
+end
+
 ---Extract code chunks from the specified buffer.
 ---Updates M.rafts[main_nr].code_chunks
 ---@param main_nr integer The main buffer number
@@ -124,94 +246,14 @@ end
 ---@param range_end_row integer? Row to end at, inclusive, 1-indexed.
 ---@return table<string, CodeChunk[]>
 keeper.extract_code_chunks = function(main_nr, lang, exclude_eval_false, range_start_row, range_end_row)
-  local query = keeper.rafts[main_nr].query
   local parser = keeper.rafts[main_nr].parser
-  local tree = parser:parse()
-  assert(tree, "[otter] Treesitter failed to parse buffer " .. main_nr)
-  local root = tree[1]:root()
-
+  
   ---@type table<string, CodeChunk[]>
   local code_chunks = {}
-  local lang_capture = nil
-  for _, match, metadata in query:iter_matches(root, main_nr, 0, -1, { all = true }) do
-    for id, nodes in pairs(match) do
-      local name = query.captures[id]
-
-      for _, node in ipairs(nodes) do
-        local text
-        lang_capture = determine_language(main_nr, name, node, metadata, lang_capture)
-        if
-          lang_capture
-          and (name == "content" or name == "injection.content")
-          and (lang == nil or lang_capture == lang)
-        then
-          -- the actual code content
-          text = ts.get_node_text(node, main_nr, { metadata = metadata[id] })
-          -- remove surrounding quotes
-          -- (workaround for treesitter offsets not properly processed)
-          text, _ = fn.strip_wrapping_quotes(text)
-          if exclude_eval_false and string.find(text, "| *eval: *false") then
-            text = ""
-          end
-
-          -- Use the range from the `offset!` directive if available
-          local start_row, start_col, end_row, end_col
-          if metadata[id] and metadata[id].range then
-            start_row, start_col, end_row, end_col = unpack(metadata[id].range)
-          else
-            start_row, start_col, end_row, end_col = node:range()
-          end
-
-          if
-            range_start_row ~= nil
-            and range_end_row ~= nil
-            and ((start_row >= range_end_row and range_end_row > 0) or end_row < range_start_row)
-          then
-            goto continue
-          end
-          local leading_offset
-          text, leading_offset = trim_leading_witespace(text, main_nr, start_row)
-          local result = {
-            range = { from = { start_row, start_col }, to = { end_row, end_col } },
-            lang = lang_capture,
-            node = node,
-            text = fn.lines(text),
-            leading_offset = leading_offset,
-          }
-          if code_chunks[lang_capture] == nil then
-            code_chunks[lang_capture] = {}
-          end
-          table.insert(code_chunks[lang_capture], result)
-          -- reset current language
-          lang_capture = nil
-        elseif fn.contains(injectable_languages, name) then
-          -- chunks where the name of the language is the name of the capture
-          if lang == nil or name == lang then
-            text = ts.get_node_text(node, main_nr, { metadata = metadata[id] })
-            text, _ = fn.strip_wrapping_quotes(text)
-
-            ---@type integer
-            ---@diagnostic disable-next-line: assign-type-mismatch
-            local start_row, start_col, end_row, end_col = node:range()
-            local leading_offset
-            text, leading_offset = trim_leading_witespace(text, main_nr, start_row)
-            local result = {
-              range = { from = { start_row, start_col }, to = { end_row, end_col } },
-              lang = name,
-              node = node,
-              text = fn.lines(text),
-              leading_offset = leading_offset,
-            }
-            if code_chunks[name] == nil then
-              code_chunks[name] = {}
-            end
-            table.insert(code_chunks[name], result)
-          end
-        end
-        ::continue::
-      end
-    end
-  end
+  
+  -- Recursively extract from parser and all nested child parsers
+  extract_from_parser_recursive(parser, main_nr, lang, exclude_eval_false, range_start_row, range_end_row, code_chunks)
+  
   return code_chunks
 end
 
