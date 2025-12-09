@@ -3,6 +3,27 @@
 --- Each main buffer is associated with a raft of
 --- otter buffers and their respective languages
 --- and code chunks
+---
+--- TODO: Remove before commit
+-- Source - https://stackoverflow.com/a
+-- Posted by hookenz, modified by community. See post 'Timeline' for change history
+-- Retrieved 2025-12-09, License - CC BY-SA 4.0
+
+function dump(o)
+   if type(o) == 'table' then
+      local s = '{ '
+      for k,v in pairs(o) do
+         if type(k) ~= 'number' then k = '"'..k..'"' end
+         s = s .. '['..k..'] = ' .. dump(v) .. ','
+      end
+      return s .. '} '
+   else
+      return tostring(o)
+   end
+end
+
+---
+---
 local keeper = {}
 
 local fn = require("otter.tools.functions")
@@ -108,12 +129,10 @@ local function trim_leading_witespace(text, bufnr, starting_ln)
   return table.concat(split, "\n"), #leading
 end
 
----@class CodeChunk
----@field range { from: [integer, integer], to: [integer, integer] }
----@field lang string
----@field node TSNode
----@field text string[]
----@field leading_offset number
+
+local function parse_code_chunk()
+  
+end
 
 ---Extract code chunks from the specified buffer.
 ---Updates M.rafts[main_nr].code_chunks
@@ -123,7 +142,7 @@ end
 ---@param range_start_row integer? Row to start from, inclusive, 1-indexed.
 ---@param range_end_row integer? Row to end at, inclusive, 1-indexed.
 ---@return table<string, CodeChunk[]>
-keeper.extract_code_chunks = function(main_nr, lang, exclude_eval_false, range_start_row, range_end_row)
+keeper.recursive_extract_code_chunks = function(main_nr, lang, exclude_eval_false, range_start_row, range_end_row )
   local query = keeper.rafts[main_nr].query
   local parser = keeper.rafts[main_nr].parser
   local tree = parser:parse()
@@ -138,6 +157,7 @@ keeper.extract_code_chunks = function(main_nr, lang, exclude_eval_false, range_s
       local name = query.captures[id]
 
       for _, node in ipairs(nodes) do
+        vim.print(name, dump(node))
         local text
         lang_capture = determine_language(main_nr, name, node, metadata, lang_capture)
         if
@@ -213,6 +233,25 @@ keeper.extract_code_chunks = function(main_nr, lang, exclude_eval_false, range_s
     end
   end
   return code_chunks
+end
+
+---@class CodeChunk
+---@field range { from: [integer, integer], to: [integer, integer] }
+---@field lang string
+---@field node TSNode
+---@field text string[]
+---@field leading_offset number
+
+---Extract code chunks from the specified buffer.
+---Updates M.rafts[main_nr].code_chunks
+---@param main_nr integer The main buffer number
+---@param lang string? language to extract. All languages if nil.
+---@param exclude_eval_false boolean? Exclude code chunks with eval: false
+---@param range_start_row integer? Row to start from, inclusive, 1-indexed.
+---@param range_end_row integer? Row to end at, inclusive, 1-indexed.
+---@return table<string, CodeChunk[]>
+keeper.extract_code_chunks = function(main_nr, lang, exclude_eval_false, range_start_row, range_end_row)
+  return keeper.recursive_extract_code_chunks(main_nr, lang, exclude_eval_false, range_start_row, range_end_row)
 end
 
 --- Get the language context of a position
