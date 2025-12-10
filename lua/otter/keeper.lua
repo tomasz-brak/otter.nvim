@@ -251,6 +251,7 @@ end
 ---@param range_end_row integer? Row to end at, inclusive, 1-indexed.
 ---@return table<string, CodeChunk[]>
 keeper.extract_code_chunks = function(main_nr, lang, exclude_eval_false, range_start_row, range_end_row)
+  vim.print("Extracting chunks")
   return keeper.recursive_extract_code_chunks(main_nr, lang, exclude_eval_false, range_start_row, range_end_row)
 end
 
