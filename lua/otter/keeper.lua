@@ -129,9 +129,9 @@ local function trim_leading_witespace(text, bufnr, starting_ln)
   return table.concat(split, "\n"), #leading
 end
 
-
-local function parse_code_chunk()
-  
+---@param name string 
+local function parse_code_chunk(name)
+  vim.print("Now parsing: " .. name)
 end
 
 ---Extract code chunks from the specified buffer.
@@ -155,11 +155,11 @@ keeper.recursive_extract_code_chunks = function(main_nr, lang, exclude_eval_fals
   for _, match, metadata in query:iter_matches(root, main_nr, 0, -1, { all = true }) do
     for id, nodes in pairs(match) do
       local name = query.captures[id]
-
+      parse_code_chunk(name)
       for _, node in ipairs(nodes) do
-        vim.print(name, dump(node))
         local text
         lang_capture = determine_language(main_nr, name, node, metadata, lang_capture)
+        vim.print("Working on node: " .. node.type())
         if
           lang_capture
           and (name == "content" or name == "injection.content")
